@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -9,6 +10,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.labels import LABELS, STATIC_BLOCKS_ES
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 LANGUAGE_MAP = {
@@ -235,8 +239,10 @@ async def translate_texts(texts: list[str], target_language: str) -> list[str]:
 async def translate_with_openrouter(texts: list[str], target_language: str) -> list[str]:
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     if not api_key:
+        logger.error("OPENROUTER_API_KEY is empty — translation skipped")
         return texts
     model = os.getenv("OPENROUTER_MODEL", "google/gemini-flash-1.5")
+    logger.info("Translating %d texts to '%s' via OpenRouter model '%s'", len(texts), target_language, model)
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -266,7 +272,9 @@ async def translate_with_openrouter(texts: list[str], target_language: str) -> l
     }
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(url, headers=headers, json=body)
+        logger.info("OpenRouter response status: %d", response.status_code)
         if response.status_code >= 400:
+            logger.error("OpenRouter error: %s", response.text[:500])
             return texts
         data = response.json()
         content = (
@@ -274,15 +282,19 @@ async def translate_with_openrouter(texts: list[str], target_language: str) -> l
             .get("message", {})
             .get("content", "")
         )
+        logger.info("OpenRouter raw content: %s", content[:300])
         # strip possible markdown fences
         content = re.sub(r"```json|```", "", content).strip()
         try:
             parsed = json.loads(content)
             translated = parsed.get("translated", [])
             if isinstance(translated, list) and len(translated) == len(texts):
+                logger.info("Translation successful: %s", translated)
                 return [str(x) for x in translated]
-        except json.JSONDecodeError:
-            pass
+            else:
+                logger.error("Translation count mismatch: got %d, expected %d", len(translated), len(texts))
+        except json.JSONDecodeError as e:
+            logger.error("JSON parse error: %s | content: %s", e, content[:300])
     return texts
 
 
