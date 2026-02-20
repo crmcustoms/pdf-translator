@@ -519,10 +519,10 @@ table.items tfoot td {{
     text-align: right;
 }}
 
-.col-concepto {{ width: 48%; }}
-.col-cantidad {{ width: 18%; }}
+.col-concepto {{ width: 45%; }}
+.col-cantidad {{ width: 17%; }}
 .col-base     {{ width: 17%; }}
-.col-iva      {{ width: 17%; }}
+.col-iva      {{ width: 21%; white-space: nowrap; }}
 
 /* TOTALS */
 .totals-wrap {{
