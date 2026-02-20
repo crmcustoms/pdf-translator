@@ -5,14 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
-      - TRANSLATION_PROVIDER=${TRANSLATION_PROVIDER:-none}
-      - DEEPL_API_KEY=${DEEPL_API_KEY:-}
-      - DEEPL_URL=${DEEPL_URL:-https://api-free.deepl.com/v2/translate}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - GOTENBERG_URL=http://gotenberg:3000/forms/chromium/convert/html
-      - PLANFIX_WEBHOOK_URL=${PLANFIX_WEBHOOK_URL:-}
     networks:
       - n8n_net
 
