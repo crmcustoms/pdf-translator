@@ -99,6 +99,7 @@ class RequestPayload(BaseModel):
     client_phone: str = ""
     client_mail: str = ""
     client_nif: str = ""
+    direction: str = ""  # client address from Planfix (Задача.Контрагент.Адрес)
     positions: str = ""
     task_id: int | str
 
@@ -259,9 +260,11 @@ async def translate_with_openrouter(texts: list[str], target_language: str) -> l
             {
                 "role": "system",
                 "content": (
-                    "You are a strict JSON translator for technical and commercial documents. "
-                    "Translate all texts in the 'texts' array into the target language. "
-                    "Keep technical terms, brand names, model numbers, and measurements unchanged. "
+                    "You are a professional translator specializing in business and commercial documents. "
+                    "Translate all texts into the target language using natural, professional business language. "
+                    "Avoid overly literal or academic translations — use terms common in real business correspondence. "
+                    "For example: 'Autónomo' → 'Self-employed' (not 'Sole Trader'); prefer natural business equivalents. "
+                    "Keep brand names, model numbers, product codes, and measurements unchanged. "
                     "Return ONLY valid JSON: {\"translated\": [\"...\", \"...\"]} "
                     "with exactly the same number of items as input."
                 ),
@@ -413,7 +416,7 @@ def render_html(
 
     # Client block fields
     client_nif_row = f'<p><strong>{labels.get("nif","NIF")}/NIF:</strong> {client_data.get("nif","")}</p>' if client_data.get("nif") else f'<p><strong>{labels.get("nif","NIF")}/NIF:</strong></p>'
-    client_addr_row = f'<p><strong>{labels.get("address","Dirección")}:</strong></p>'
+    client_addr_row = f'<p><strong>{labels.get("address","Dirección")}:</strong> {client_data.get("address","")}</p>'
     client_phone_row = f'<p><strong>{labels.get("phone","Telf")}:</strong> {client_data.get("phone","")}</p>' if client_data.get("phone") else ""
     client_email_row = f'<p><strong>{labels.get("email","Email")}:</strong> {client_data.get("email","")}</p>' if client_data.get("email") else ""
 
@@ -734,6 +737,7 @@ async def generate_offer_pdf(payload: WebhookBody) -> dict[str, Any]:
             "phone": data.client_phone or "",
             "email": data.client_mail or "",
             "nif": data.client_nif or "",
+            "address": data.direction or "",
         },
         doc_number=doc_number,
         doc_date=doc_date,
