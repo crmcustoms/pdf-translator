@@ -110,6 +110,7 @@ class WebhookBody(BaseModel):
 
 class Item(BaseModel):
     description: str = ""
+    characteristics: str = ""
     unit_price: float = 0.0
     quantity: float = 0.0
     tax_percent: float = 0.0
@@ -387,6 +388,61 @@ async def translate_static_blocks(lang: str) -> dict[str, str]:
     return dict(zip(keys, translated_values))
 
 
+async def get_task_characteristics(task_id: Any) -> list[str]:
+    """
+    Fetch characteristics for each position via Planfix REST API.
+    Returns list of strings indexed by position order.
+    Empty string means no characteristics for that position.
+    Falls back to empty list on any error.
+    """
+    base_url = os.getenv("PLANFIX_BASE_URL", "").rstrip("/")
+    token = os.getenv("PLANFIX_API_TOKEN", "")
+    if not base_url or not token:
+        logger.info("PLANFIX_API_TOKEN or PLANFIX_BASE_URL not set — skipping characteristics")
+        return []
+
+    url = f"{base_url}/rest/task/{task_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(url, headers=headers)
+            logger.info("Planfix API task response status: %d", response.status_code)
+            if response.status_code >= 400:
+                logger.error("Planfix API error: %s", response.text[:300])
+                return []
+            data = response.json()
+            logger.info("Planfix API task top-level keys: %s", list(data.keys()))
+            # Navigate to analytics — exact path confirmed from real API response
+            analytics_list = (
+                data.get("analytics")
+                or (data.get("task") or {}).get("analytics")
+                or []
+            )
+            for analytic in analytics_list:
+                name = analytic.get("name", "") or analytic.get("title", "")
+                if "покупка" in name.lower():
+                    rows = analytic.get("rows") or analytic.get("items") or []
+                    result = []
+                    for row in rows:
+                        char_value = ""
+                        fields = row.get("fields") or row.get("fieldData") or []
+                        for field in fields:
+                            field_name = (field.get("name") or field.get("title") or "").lower()
+                            if "характер" in field_name:
+                                char_value = str(field.get("value") or "").strip()
+                                break
+                        result.append(char_value)
+                    logger.info("Characteristics fetched for %d positions", len(result))
+                    return result
+            logger.info("No matching analytics block found in Planfix response")
+    except Exception as e:
+        logger.error("Error fetching Planfix characteristics: %s", e)
+    return []
+
+
 def render_html(
     labels: dict[str, str],
     static_blocks: dict[str, str],
@@ -407,7 +463,7 @@ def render_html(
         qty_int = int(item.quantity) if item.quantity == int(item.quantity) else item.quantity
         rows.append(f"""
         <tr>
-            <td class="col-concepto">{item.description}</td>
+            <td class="col-concepto">{item.description}{f'<br><span class="char">{item.characteristics}</span>' if item.characteristics else ''}</td>
             <td class="col-cantidad">{qty_int} x {fmt_money(item.unit_price)} &euro;</td>
             <td class="col-base">{fmt_money(item.net_amount)} &euro;</td>
             <td class="col-iva">{int(item.tax_percent)}% ({fmt_money(item.tax_amount)}) &euro;</td>
@@ -526,6 +582,7 @@ table.items tfoot td {{
 .col-cantidad {{ width: 17%; }}
 .col-base     {{ width: 17%; }}
 .col-iva      {{ width: 21%; white-space: nowrap; }}
+.char         {{ color: #888888; font-size: 9pt; }}
 
 /* TOTALS */
 .totals-wrap {{
@@ -709,6 +766,12 @@ async def generate_offer_pdf(payload: WebhookBody) -> dict[str, Any]:
     items = parse_positions(data.positions or "")
     if not items:
         raise HTTPException(status_code=400, detail="No items parsed from positions")
+
+    # Fetch characteristics from Planfix API and attach to items
+    characteristics = await get_task_characteristics(data.task_id)
+    for idx, item in enumerate(items):
+        if idx < len(characteristics):
+            item.characteristics = characteristics[idx]
 
     # Translate descriptions (skip if Spanish — already in Spanish)
     if lang != "es":
