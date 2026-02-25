@@ -390,10 +390,12 @@ async def translate_static_blocks(lang: str) -> dict[str, str]:
 
 async def get_task_characteristics(task_id: Any) -> list[str]:
     """
-    Fetch characteristics for each position via Planfix REST API (datatag endpoints).
-    Step 1: POST /rest/datatag/list — find datatag type ID for "Покупка: товары/услуги"
-    Step 2: POST /rest/datatag/{id}/entry/list — get entries for task_id
-    Returns list of characteristics strings indexed by position order.
+    Fetch characteristics for each position via Planfix REST API.
+    Step 1: POST /rest/datatag/list          — find datatag ID for "Покупка"
+    Step 2: POST /rest/datatag/{id}/entry/list — get entries with customFieldData
+            Each entry has field "Concepto" (type=directory record) → value.id = directory entry key
+    Step 3: GET /rest/directory/{dirId}/entry/{key}?fields=customFieldData
+            → read field "Характеристики"
     """
     base_url = os.getenv("PLANFIX_BASE_URL", "").rstrip("/")
     token = os.getenv("PLANFIX_API_TOKEN", "")
@@ -406,115 +408,107 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
         "Content-Type": "application/json",
     }
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            # Step 1: Get list of datatag types to find "Покупка" type ID
+        async with httpx.AsyncClient(timeout=30) as client:
+
+            # ── Step 1: find datatag ID for "Покупка" ──────────────────────────
             types_resp = await client.post(
                 f"{base_url}/rest/datatag/list",
                 headers=headers,
-                json={"fields": "id,name,title,description"},
+                json={"fields": "id,name,title"},
             )
-            logger.info("Datatag list status: %d", types_resp.status_code)
             if types_resp.status_code >= 400:
                 logger.error("Datatag list error: %s", types_resp.text[:300])
                 return []
-            types_data = types_resp.json()
-            logger.info("Datatag list keys: %s", list(types_data.keys()))
-
-            datatag_types = (
-                types_data.get("dataTags")
-                or types_data.get("datatags")
-                or types_data.get("items")
-                or []
-            )
-            logger.info("Found %d datatag types", len(datatag_types))
-
+            datatag_types = types_resp.json().get("dataTags") or []
             datatag_id = None
             for dt in datatag_types:
-                name = dt.get("name", "") or dt.get("title", "")
-                logger.info("Datatag: id=%s name=%s", dt.get("id"), name)
-                if "покупка" in name.lower():
+                if "покупка" in (dt.get("name") or "").lower():
                     datatag_id = dt.get("id")
                     break
-
             if not datatag_id:
-                logger.error("Could not find 'Покупка' datatag type in list")
+                logger.error("Could not find 'Покупка' datatag")
                 return []
+            logger.info("Datatag id=%s", datatag_id)
 
-            # Step 2: Get entries for this datatag filtered by task_id
-            # NOTE: Do NOT pass "fields" param — let API return all available fields
+            # ── Step 2: get entries for this task ──────────────────────────────
+            # "key" is the correct entry id field; customFieldData has Concepto ref
             task_id_int = int(task_id) if str(task_id).isdigit() else task_id
             entries_resp = await client.post(
                 f"{base_url}/rest/datatag/{datatag_id}/entry/list",
                 headers=headers,
-                json={"taskId": task_id_int},
+                json={"taskId": task_id_int, "fields": "key,dataTag,customFieldData"},
             )
-            logger.info("Datatag entries status: %d", entries_resp.status_code)
             if entries_resp.status_code >= 400:
                 logger.error("Datatag entries error: %s", entries_resp.text[:300])
                 return []
-            entries_data = entries_resp.json()
-            logger.info("Datatag entries keys: %s", list(entries_data.keys()))
-
-            entries = (
-                entries_data.get("dataTagEntries")
-                or entries_data.get("entries")
-                or entries_data.get("items")
-                or []
-            )
+            entries = entries_resp.json().get("dataTagEntries") or []
             logger.info("Found %d entries for task %s", len(entries), task_id)
+
+            # Directory ID: try env override first, discover from field otherwise
+            dir_id_env = os.getenv("PLANFIX_CONCEPTO_DIRECTORY_ID", "")
 
             result = []
             for i, entry in enumerate(entries):
+                if i < 3:
+                    logger.info("Entry %d JSON: %s", i, json.dumps(entry, ensure_ascii=False)[:600])
+
+                # Find "Concepto" field in customFieldData → get directory entry key
+                concepto_entry_key = None
+                discovered_dir_id = None
+                for cf in (entry.get("customFieldData") or []):
+                    field_def = cf.get("field") or {}
+                    fname = (field_def.get("name") or "").lower()
+                    if "concepto" in fname:
+                        val = cf.get("value") or {}
+                        concepto_entry_key = val.get("id")
+                        # Try to discover directory ID from field definition
+                        discovered_dir_id = (
+                            str(field_def.get("directory", {}).get("id") or "")
+                            or str(field_def.get("directoryId") or "")
+                        ) or None
+                        logger.info(
+                            "Concepto found: entry_key=%s dir_id_from_field=%s",
+                            concepto_entry_key, discovered_dir_id,
+                        )
+                        break
+
+                dir_id = dir_id_env or discovered_dir_id
+                if not dir_id:
+                    logger.error(
+                        "Directory ID unknown — set PLANFIX_CONCEPTO_DIRECTORY_ID in .env. "
+                        "Full field_def: %s", json.dumps(field_def if 'field_def' in dir() else {}, ensure_ascii=False)
+                    )
+
                 char_value = ""
-
-                # Log full entry JSON for debugging (first 2 entries only)
-                if i < 2:
-                    try:
-                        logger.info("Entry %d FULL JSON: %s", i, json.dumps(entry, ensure_ascii=False)[:800])
-                    except Exception:
-                        logger.info("Entry %d keys: %s", i, list(entry.keys()))
-
-                # Try to find characteristics in multiple possible locations
-                def _find_char_in_fields(fields_list: list) -> str:
-                    for field in fields_list:
-                        if not isinstance(field, dict):
-                            continue
-                        # field may have "name"/"title" at top level OR nested under "field" key
-                        field_info = field.get("field") or field
-                        field_name = (
-                            field_info.get("name") or field_info.get("title") or
-                            field.get("name") or field.get("title") or ""
-                        ).lower()
-                        field_value = field.get("value") or field.get("stringValue") or ""
-                        if "характер" in field_name:
-                            return str(field_value).strip()
-                    return ""
-
-                # Location 1: entry.customFieldData (standard)
-                cfd_1 = entry.get("customFieldData") or []
-                if cfd_1:
-                    char_value = _find_char_in_fields(cfd_1)
-
-                # Location 2: entry.dataTag.customFieldData (nested)
-                if not char_value:
-                    dt = entry.get("dataTag") or {}
-                    cfd_2 = dt.get("customFieldData") or dt.get("fields") or []
-                    if cfd_2:
-                        char_value = _find_char_in_fields(cfd_2)
-
-                # Location 3: entry.fields (alternative key)
-                if not char_value:
-                    cfd_3 = entry.get("fields") or []
-                    if cfd_3:
-                        char_value = _find_char_in_fields(cfd_3)
+                if concepto_entry_key and dir_id:
+                    # ── Step 3: GET directory entry → read "Характеристики" ───────
+                    dir_resp = await client.get(
+                        f"{base_url}/rest/directory/{dir_id}/entry/{concepto_entry_key}",
+                        headers=headers,
+                        params={"fields": "customFieldData"},
+                    )
+                    logger.info(
+                        "Directory entry %s status: %d", concepto_entry_key, dir_resp.status_code
+                    )
+                    if dir_resp.status_code == 200:
+                        dir_data = dir_resp.json()
+                        if i < 3:
+                            logger.info("Dir entry JSON: %s", json.dumps(dir_data, ensure_ascii=False)[:400])
+                        for df in (dir_data.get("customFieldData") or []):
+                            df_name = ((df.get("field") or {}).get("name") or "").lower()
+                            if "характер" in df_name:
+                                char_value = str(df.get("value") or "").strip()
+                                break
+                    else:
+                        logger.error("Directory entry error: %s", dir_resp.text[:200])
 
                 result.append(char_value)
 
-            logger.info("Characteristics extracted: %s", result)
+            logger.info("Characteristics result: %s", result)
             return result
 
     except Exception as e:
-        logger.error("Error fetching Planfix characteristics: %s", e)
+        logger.error("Error fetching characteristics: %s", e)
     return []
 
 
