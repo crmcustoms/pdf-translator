@@ -447,7 +447,8 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                 cf_data = cf_resp.json()
                 logger.info("Datatag customfields keys: %s", list(cf_data.keys()))
                 cf_list = (
-                    cf_data.get("customFields")
+                    cf_data.get("customfields")   # API returns lowercase
+                    or cf_data.get("customFields")
                     or cf_data.get("fields")
                     or cf_data.get("items")
                     or []
