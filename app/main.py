@@ -441,11 +441,12 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                 return []
 
             # Step 2: Get entries for this datatag filtered by task_id
+            # NOTE: Do NOT pass "fields" param — let API return all available fields
             task_id_int = int(task_id) if str(task_id).isdigit() else task_id
             entries_resp = await client.post(
                 f"{base_url}/rest/datatag/{datatag_id}/entry/list",
                 headers=headers,
-                json={"taskId": task_id_int, "fields": "id,dataTag,customFieldData"},
+                json={"taskId": task_id_int},
             )
             logger.info("Datatag entries status: %d", entries_resp.status_code)
             if entries_resp.status_code >= 400:
@@ -465,17 +466,48 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
             result = []
             for i, entry in enumerate(entries):
                 char_value = ""
-                fields = entry.get("customFieldData") or []
-                logger.info("Entry %d keys: %s", i, list(entry.keys()))
-                logger.info("Entry %d dataTag: %s", i, str(entry.get("dataTag", {}))[:300])
-                logger.info("Entry %d customFieldData count: %d", i, len(fields))
-                for field in fields:
-                    field_name = (field.get("name") or field.get("title") or "").lower()
-                    field_value = field.get("value")
-                    logger.info("  Field: name=%s value=%s", field_name, str(field_value)[:80])
-                    if "характер" in field_name:
-                        char_value = str(field_value or "").strip()
-                        break
+
+                # Log full entry JSON for debugging (first 2 entries only)
+                if i < 2:
+                    try:
+                        logger.info("Entry %d FULL JSON: %s", i, json.dumps(entry, ensure_ascii=False)[:800])
+                    except Exception:
+                        logger.info("Entry %d keys: %s", i, list(entry.keys()))
+
+                # Try to find characteristics in multiple possible locations
+                def _find_char_in_fields(fields_list: list) -> str:
+                    for field in fields_list:
+                        if not isinstance(field, dict):
+                            continue
+                        # field may have "name"/"title" at top level OR nested under "field" key
+                        field_info = field.get("field") or field
+                        field_name = (
+                            field_info.get("name") or field_info.get("title") or
+                            field.get("name") or field.get("title") or ""
+                        ).lower()
+                        field_value = field.get("value") or field.get("stringValue") or ""
+                        if "характер" in field_name:
+                            return str(field_value).strip()
+                    return ""
+
+                # Location 1: entry.customFieldData (standard)
+                cfd_1 = entry.get("customFieldData") or []
+                if cfd_1:
+                    char_value = _find_char_in_fields(cfd_1)
+
+                # Location 2: entry.dataTag.customFieldData (nested)
+                if not char_value:
+                    dt = entry.get("dataTag") or {}
+                    cfd_2 = dt.get("customFieldData") or dt.get("fields") or []
+                    if cfd_2:
+                        char_value = _find_char_in_fields(cfd_2)
+
+                # Location 3: entry.fields (alternative key)
+                if not char_value:
+                    cfd_3 = entry.get("fields") or []
+                    if cfd_3:
+                        char_value = _find_char_in_fields(cfd_3)
+
                 result.append(char_value)
 
             logger.info("Characteristics extracted: %s", result)
