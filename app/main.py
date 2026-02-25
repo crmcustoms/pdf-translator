@@ -479,11 +479,12 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                 char_value = ""
                 if concepto_entry_key and dir_id:
                     # ── Step 3: GET directory entry → read "Характеристики" ───────
+                    # For directory entries, fields must be numeric field IDs (not "customFieldData")
                     # Field "Характеристики" id=40625, type=0 (text)
                     dir_resp = await client.get(
                         f"{base_url}/rest/directory/{dir_id}/entry/{concepto_entry_key}",
                         headers=headers,
-                        params={"fields": "customFieldData"},
+                        params={"fields": "key,40625"},
                     )
                     logger.info(
                         "Directory entry %s status: %d", concepto_entry_key, dir_resp.status_code
