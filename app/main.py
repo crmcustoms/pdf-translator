@@ -390,9 +390,9 @@ async def translate_static_blocks(lang: str) -> dict[str, str]:
 
 async def get_task_characteristics(task_id: Any) -> list[str]:
     """
-    Fetch characteristics for each position via Planfix REST API.
-    Step 1: GET /rest/analytic/ — find analytic type ID for "Покупка: товары/услуги"
-    Step 2: POST /rest/analytic/{id}/list — get records filtered by task_id
+    Fetch characteristics for each position via Planfix REST API (datatag endpoints).
+    Step 1: POST /rest/datatag/list — find datatag type ID for "Покупка: товары/услуги"
+    Step 2: POST /rest/datatag/{id}/entry/list — get entries for task_id
     Returns list of characteristics strings indexed by position order.
     """
     base_url = os.getenv("PLANFIX_BASE_URL", "").rstrip("/")
@@ -407,62 +407,65 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
     }
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            # Step 1: Get list of analytic types to find "Покупка" type ID
-            types_resp = await client.get(f"{base_url}/rest/analytic/", headers=headers)
-            logger.info("Analytic types status: %d", types_resp.status_code)
+            # Step 1: Get list of datatag types to find "Покупка" type ID
+            types_resp = await client.post(
+                f"{base_url}/rest/datatag/list",
+                headers=headers,
+                json={},
+            )
+            logger.info("Datatag list status: %d", types_resp.status_code)
             if types_resp.status_code >= 400:
-                logger.error("Analytic types error: %s", types_resp.text[:300])
+                logger.error("Datatag list error: %s", types_resp.text[:300])
                 return []
             types_data = types_resp.json()
-            logger.info("Analytic types keys: %s", list(types_data.keys()))
+            logger.info("Datatag list keys: %s", list(types_data.keys()))
 
-            analytic_types = (
-                types_data.get("analyticTypes")
-                or types_data.get("analytics")
+            datatag_types = (
+                types_data.get("dataTags")
+                or types_data.get("datatags")
                 or types_data.get("items")
                 or []
             )
-            logger.info("Found %d analytic types", len(analytic_types))
+            logger.info("Found %d datatag types", len(datatag_types))
 
-            analytic_type_id = None
-            for at in analytic_types:
-                name = at.get("name", "") or at.get("title", "")
-                logger.info("Analytic type: id=%s name=%s", at.get("id"), name)
+            datatag_id = None
+            for dt in datatag_types:
+                name = dt.get("name", "") or dt.get("title", "")
+                logger.info("Datatag: id=%s name=%s", dt.get("id"), name)
                 if "покупка" in name.lower():
-                    analytic_type_id = at.get("id")
+                    datatag_id = dt.get("id")
                     break
 
-            if not analytic_type_id:
-                logger.error("Could not find 'Покупка' analytic type in list")
+            if not datatag_id:
+                logger.error("Could not find 'Покупка' datatag type in list")
                 return []
 
-            # Step 2: Get records for this analytic filtered by task_id
-            records_url = f"{base_url}/rest/analytic/{analytic_type_id}/list"
-            records_body = {
-                "offset": 0,
-                "pageSize": 100,
-                "filters": [{"type": 1, "operator": "equal", "field": "task", "value": str(task_id)}],
-            }
-            rec_resp = await client.post(records_url, headers=headers, json=records_body)
-            logger.info("Analytic records status: %d", rec_resp.status_code)
-            if rec_resp.status_code >= 400:
-                logger.error("Analytic records error: %s", rec_resp.text[:300])
+            # Step 2: Get entries for this datatag filtered by task_id
+            task_id_int = int(task_id) if str(task_id).isdigit() else task_id
+            entries_resp = await client.post(
+                f"{base_url}/rest/datatag/{datatag_id}/entry/list",
+                headers=headers,
+                json={"taskId": task_id_int, "fields": "id,dataTag,customFieldData"},
+            )
+            logger.info("Datatag entries status: %d", entries_resp.status_code)
+            if entries_resp.status_code >= 400:
+                logger.error("Datatag entries error: %s", entries_resp.text[:300])
                 return []
-            rec_data = rec_resp.json()
-            logger.info("Analytic records keys: %s", list(rec_data.keys()))
+            entries_data = entries_resp.json()
+            logger.info("Datatag entries keys: %s", list(entries_data.keys()))
 
-            records = (
-                rec_data.get("analytics")
-                or rec_data.get("records")
-                or rec_data.get("items")
+            entries = (
+                entries_data.get("dataTagEntries")
+                or entries_data.get("entries")
+                or entries_data.get("items")
                 or []
             )
-            logger.info("Found %d analytic records for task %s", len(records), task_id)
+            logger.info("Found %d entries for task %s", len(entries), task_id)
 
             result = []
-            for record in records:
+            for entry in entries:
                 char_value = ""
-                fields = record.get("customFieldData") or record.get("fields") or []
+                fields = entry.get("customFieldData") or []
                 for field in fields:
                     field_name = (field.get("name") or field.get("title") or "").lower()
                     if "характер" in field_name:
