@@ -415,10 +415,13 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                 return []
             data = response.json()
             logger.info("Planfix API task top-level keys: %s", list(data.keys()))
+            task_data = data.get("task") or {}
+            logger.info("Planfix API task inner keys: %s", list(task_data.keys()))
             # Navigate to analytics — exact path confirmed from real API response
             analytics_list = (
                 data.get("analytics")
-                or (data.get("task") or {}).get("analytics")
+                or task_data.get("analytics")
+                or task_data.get("analyticData")
                 or []
             )
             for analytic in analytics_list:
