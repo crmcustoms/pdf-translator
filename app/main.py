@@ -411,7 +411,7 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
             types_resp = await client.post(
                 f"{base_url}/rest/datatag/list",
                 headers=headers,
-                json={},
+                json={"fields": "id,name,title,description"},
             )
             logger.info("Datatag list status: %d", types_resp.status_code)
             if types_resp.status_code >= 400:
