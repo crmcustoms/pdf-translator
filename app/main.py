@@ -467,6 +467,7 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                 char_value = ""
                 fields = entry.get("customFieldData") or []
                 logger.info("Entry %d keys: %s", i, list(entry.keys()))
+                logger.info("Entry %d dataTag: %s", i, str(entry.get("dataTag", {}))[:300])
                 logger.info("Entry %d customFieldData count: %d", i, len(fields))
                 for field in fields:
                     field_name = (field.get("name") or field.get("title") or "").lower()
