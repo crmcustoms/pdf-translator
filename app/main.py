@@ -514,7 +514,7 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                         dir_data = dir_resp.json()
                         if i < 3:
                             logger.info("Dir entry JSON: %s", json.dumps(dir_data, ensure_ascii=False)[:400])
-                        for df in (dir_data.get("customFieldData") or []):
+                        for df in ((dir_data.get("entry") or {}).get("customFieldData") or []):
                             df_field = df.get("field") or {}
                             if df_field.get("id") == 40625 or "характер" in (df_field.get("name") or "").lower():
                                 char_value = str(df.get("value") or "").strip()
