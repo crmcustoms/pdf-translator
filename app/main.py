@@ -472,16 +472,14 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                         )
                         break
 
-                dir_id = dir_id_env or discovered_dir_id
-                if not dir_id:
-                    logger.error(
-                        "Directory ID unknown — set PLANFIX_CONCEPTO_DIRECTORY_ID in .env. "
-                        "Full field_def: %s", json.dumps(field_def if 'field_def' in dir() else {}, ensure_ascii=False)
-                    )
+                # Directory "Товары/Услуги" id=16177 (from Planfix directory list)
+                # Override via PLANFIX_CONCEPTO_DIRECTORY_ID if needed
+                dir_id = dir_id_env or discovered_dir_id or "16177"
 
                 char_value = ""
                 if concepto_entry_key and dir_id:
                     # ── Step 3: GET directory entry → read "Характеристики" ───────
+                    # Field "Характеристики" id=40625, type=0 (text)
                     dir_resp = await client.get(
                         f"{base_url}/rest/directory/{dir_id}/entry/{concepto_entry_key}",
                         headers=headers,
@@ -495,8 +493,9 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
                         if i < 3:
                             logger.info("Dir entry JSON: %s", json.dumps(dir_data, ensure_ascii=False)[:400])
                         for df in (dir_data.get("customFieldData") or []):
-                            df_name = ((df.get("field") or {}).get("name") or "").lower()
-                            if "характер" in df_name:
+                            df_field = df.get("field") or {}
+                            # Match by field id=40625 OR by name containing "характер"
+                            if df_field.get("id") == 40625 or "характер" in (df_field.get("name") or "").lower():
                                 char_value = str(df.get("value") or "").strip()
                                 break
                     else:
