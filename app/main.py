@@ -391,9 +391,9 @@ async def translate_static_blocks(lang: str) -> dict[str, str]:
 async def get_task_characteristics(task_id: Any) -> list[str]:
     """
     Fetch characteristics for each position via Planfix REST API.
-    Returns list of strings indexed by position order.
-    Empty string means no characteristics for that position.
-    Falls back to empty list on any error.
+    Step 1: GET /rest/analytic/ — find analytic type ID for "Покупка: товары/услуги"
+    Step 2: POST /rest/analytic/{id}/list — get records filtered by task_id
+    Returns list of characteristics strings indexed by position order.
     """
     base_url = os.getenv("PLANFIX_BASE_URL", "").rstrip("/")
     token = os.getenv("PLANFIX_API_TOKEN", "")
@@ -401,46 +401,78 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
         logger.info("PLANFIX_API_TOKEN or PLANFIX_BASE_URL not set — skipping characteristics")
         return []
 
-    url = f"{base_url}/rest/task/{task_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(url, headers=headers)
-            logger.info("Planfix API task response status: %d", response.status_code)
-            if response.status_code >= 400:
-                logger.error("Planfix API error: %s", response.text[:300])
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Step 1: Get list of analytic types to find "Покупка" type ID
+            types_resp = await client.get(f"{base_url}/rest/analytic/", headers=headers)
+            logger.info("Analytic types status: %d", types_resp.status_code)
+            if types_resp.status_code >= 400:
+                logger.error("Analytic types error: %s", types_resp.text[:300])
                 return []
-            data = response.json()
-            logger.info("Planfix API task top-level keys: %s", list(data.keys()))
-            task_data = data.get("task") or {}
-            logger.info("Planfix API task inner keys: %s", list(task_data.keys()))
-            # Navigate to analytics — exact path confirmed from real API response
-            analytics_list = (
-                data.get("analytics")
-                or task_data.get("analytics")
-                or task_data.get("analyticData")
+            types_data = types_resp.json()
+            logger.info("Analytic types keys: %s", list(types_data.keys()))
+
+            analytic_types = (
+                types_data.get("analyticTypes")
+                or types_data.get("analytics")
+                or types_data.get("items")
                 or []
             )
-            for analytic in analytics_list:
-                name = analytic.get("name", "") or analytic.get("title", "")
+            logger.info("Found %d analytic types", len(analytic_types))
+
+            analytic_type_id = None
+            for at in analytic_types:
+                name = at.get("name", "") or at.get("title", "")
+                logger.info("Analytic type: id=%s name=%s", at.get("id"), name)
                 if "покупка" in name.lower():
-                    rows = analytic.get("rows") or analytic.get("items") or []
-                    result = []
-                    for row in rows:
-                        char_value = ""
-                        fields = row.get("fields") or row.get("fieldData") or []
-                        for field in fields:
-                            field_name = (field.get("name") or field.get("title") or "").lower()
-                            if "характер" in field_name:
-                                char_value = str(field.get("value") or "").strip()
-                                break
-                        result.append(char_value)
-                    logger.info("Characteristics fetched for %d positions", len(result))
-                    return result
-            logger.info("No matching analytics block found in Planfix response")
+                    analytic_type_id = at.get("id")
+                    break
+
+            if not analytic_type_id:
+                logger.error("Could not find 'Покупка' analytic type in list")
+                return []
+
+            # Step 2: Get records for this analytic filtered by task_id
+            records_url = f"{base_url}/rest/analytic/{analytic_type_id}/list"
+            records_body = {
+                "offset": 0,
+                "pageSize": 100,
+                "filters": [{"type": 1, "operator": "equal", "field": "task", "value": str(task_id)}],
+            }
+            rec_resp = await client.post(records_url, headers=headers, json=records_body)
+            logger.info("Analytic records status: %d", rec_resp.status_code)
+            if rec_resp.status_code >= 400:
+                logger.error("Analytic records error: %s", rec_resp.text[:300])
+                return []
+            rec_data = rec_resp.json()
+            logger.info("Analytic records keys: %s", list(rec_data.keys()))
+
+            records = (
+                rec_data.get("analytics")
+                or rec_data.get("records")
+                or rec_data.get("items")
+                or []
+            )
+            logger.info("Found %d analytic records for task %s", len(records), task_id)
+
+            result = []
+            for record in records:
+                char_value = ""
+                fields = record.get("customFieldData") or record.get("fields") or []
+                for field in fields:
+                    field_name = (field.get("name") or field.get("title") or "").lower()
+                    if "характер" in field_name:
+                        char_value = str(field.get("value") or "").strip()
+                        break
+                result.append(char_value)
+
+            logger.info("Characteristics extracted: %s", result)
+            return result
+
     except Exception as e:
         logger.error("Error fetching Planfix characteristics: %s", e)
     return []
