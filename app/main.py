@@ -862,12 +862,18 @@ async def generate_offer_pdf(payload: WebhookBody) -> dict[str, Any]:
         if idx < len(characteristics):
             item.characteristics = characteristics[idx]
 
-    # Translate descriptions (skip if Spanish — already in Spanish)
+    # Translate descriptions and characteristics (skip if Spanish — already in Spanish)
     if lang != "es":
         descriptions = [item.description for item in items]
         translated = await translate_texts(descriptions, lang)
         for idx, item in enumerate(items):
             item.description = translated[idx]
+
+        chars = [item.characteristics for item in items]
+        if any(chars):
+            translated_chars = await translate_texts(chars, lang)
+            for idx, item in enumerate(items):
+                item.characteristics = translated_chars[idx]
 
     # Translate static blocks
     static_blocks = await translate_static_blocks(lang)
