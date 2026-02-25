@@ -463,13 +463,17 @@ async def get_task_characteristics(task_id: Any) -> list[str]:
             logger.info("Found %d entries for task %s", len(entries), task_id)
 
             result = []
-            for entry in entries:
+            for i, entry in enumerate(entries):
                 char_value = ""
                 fields = entry.get("customFieldData") or []
+                logger.info("Entry %d keys: %s", i, list(entry.keys()))
+                logger.info("Entry %d customFieldData count: %d", i, len(fields))
                 for field in fields:
                     field_name = (field.get("name") or field.get("title") or "").lower()
+                    field_value = field.get("value")
+                    logger.info("  Field: name=%s value=%s", field_name, str(field_value)[:80])
                     if "характер" in field_name:
-                        char_value = str(field.get("value") or "").strip()
+                        char_value = str(field_value or "").strip()
                         break
                 result.append(char_value)
 
